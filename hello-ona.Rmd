@@ -22,7 +22,7 @@ summary(cars)
 
 library(tidyverse)
 library(igraph)
-
+print("Hello, network!")
 ```
 
 ## Including Plots
