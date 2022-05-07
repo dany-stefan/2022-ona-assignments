@@ -1,17 +1,3 @@
----
-title: "Exercise 1"
-output:
-  pdf_document: default
-  github_document: default
----
-
-```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE)
-```
-
-## Code
-
-```
 library("tidyverse")
 library("igraph")
 csv = read_csv('Connections.csv')
@@ -19,18 +5,10 @@ csv
 View(csv)
 attach(csv)
 csv %>% drop_na(Company)
-```
-
-Counting
-
-```
 count = csv %>% count(Company, sort=TRUE)
 count
-```
 
-![](count.png)
 
-```
 csv$last_initial <- substr(csv$`Last Name`, 1, 1)
 csv$node_label <- paste(csv$`First Name`, csv$last_initial)
 nodes <- csv %>% distinct(node_label)
@@ -51,23 +29,11 @@ edges <- edges %>%
 
 edges <- select(edges, node_1, node_2)
 edges
-```
 
-![](edges.png)
 
-Graph Network
-
-```
 library("tidygraph")
 library("ggraph")
 network <- tbl_graph(nodes=nodes, edges=edges, directed=FALSE)
 network
-```
 
-![](network.png)
-
-```
 ggraph(network) + geom_edge_link() + geom_node_point() + theme_graph()
-```
-
-![](graph.png)
