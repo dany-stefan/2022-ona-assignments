@@ -1,0 +1,31 @@
+---
+title: "Exercise 1"
+output:
+  pdf_document: default
+  github_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Code
+
+```
+library("tidyverse")
+library("igraph")
+csv = read_csv('/Users/danystefan/Documents/01 McGill University/01 MMA/01 Summer 2022/ORGB 672/Assignments/Exe. 1/Connections.csv')
+csv
+View(csv)
+attach(csv)
+csv %>% drop_na(Company)
+```
+
+Counting
+
+```
+count = csv %>% count(Company, sort=TRUE)
+count
+```
+
+![](/Users/danystefan/Documents/01 McGill University/01 MMA/01 Summer 2022/ORGB 672/Assignments/Exe. 1/count.png)
