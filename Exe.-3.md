@@ -297,11 +297,11 @@ net = graph_from_data_frame(d=tm, vertices=nodes, directed=TRUE)
 net
 ```
 
-    ## IGRAPH 7cf9f91 DN-- 173 1142 -- 
+    ## IGRAPH c68c38e DN-- 173 1142 -- 
     ## + attr: name (v/c), art_unit (v/n), wg (v/c), application_number (e/c),
     ## | advice_date (e/n), ego_art_unit (e/n), ego_wg (e/c), alter_art_unit
     ## | (e/n), alter_wg (e/c)
-    ## + edges from 7cf9f91 (vertex names):
+    ## + edges from c68c38e (vertex names):
     ##  [1] 59456->99518 59589->69665 60706->78051 60706->78051 60706->78051
     ##  [6] 60706->78051 60706->78051 60706->78051 60706->78051 60706->65547
     ## [11] 60706->78051 60706->78051 60706->78051 61519->72253 61519->61519
@@ -329,7 +329,7 @@ centralities = data.frame(centralities)
 V(net)
 ```
 
-    ## + 173/173 vertices, named, from 7cf9f91:
+    ## + 173/173 vertices, named, from c68c38e:
     ##   [1] 59156 59407 59456 59539 59589 60706 60837 60991 61299 61416 61519 62024
     ##  [13] 62312 62464 62495 62621 62767 62778 62815 62862 62990 63027 63030 63190
     ##  [25] 63219 63234 63244 63713 63977 64073 64823 64992 65121 65131 65179 65271
