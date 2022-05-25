@@ -1,0 +1,218 @@
+---
+title: "Exe. 3"
+output:
+  github_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+```
+```{r}
+library(ggraph)
+library(igraph)
+
+library(arrow)
+library(tidyverse)
+library(gender)
+library(wru)
+library(lubridate)
+
+library(ggplot2)
+library(gridExtra)
+library(grid)
+
+library("gender")
+```
+
+## Data
+
+```{r}
+app <- read_parquet('/Users/danystefan/Documents/01 McGill University/01 MMA/01 Summer 2022/ORGB 672/Assignments/Exe. 3/672_project_data/app_data_sample.parquet')
+
+edges <- read_csv('/Users/danystefan/Documents/01 McGill University/01 MMA/01 Summer 2022/ORGB 672/Assignments/Exe. 3/672_project_data/edges_sample.csv')
+```
+
+## Add gender part
+
+```{r}
+# first name
+names <- app %>% distinct(examiner_name_first)
+# names and gender
+names_gender <- names %>% 
+  do(results = gender(.$examiner_name_first, method = "ssa")) %>% 
+  unnest(cols = c(results), keep_empty = TRUE) %>% 
+  select(
+    examiner_name_first = name,
+    gender,
+    proportion_female
+  )
+names_gender <- names_gender %>% select(examiner_name_first, gender)
+
+# join
+app <- app %>% left_join(names_gender, by='examiner_name_first')
+```
+
+## Add race part
+
+```{r}
+# last names
+sur <- app %>% select(surname = examiner_name_last) %>% distinct()
+
+race <- predict_race(voter.file = sur, surname.only = T) %>% as_tibble()
+race <- race %>%
+  mutate(max_race_p = pmax(pred.asi, pred.bla, pred.his, pred.oth, pred.whi)) %>% 
+  mutate(race = case_when(
+    max_race_p == pred.asi ~ "Asian",
+    max_race_p == pred.bla ~ "black",
+    max_race_p == pred.his ~ "Hispanic",
+    max_race_p == pred.oth ~ "other",
+    max_race_p == pred.whi ~ "white",
+    TRUE ~ NA_character_
+  ))
+
+# cleanup
+race <- race %>% select(surname, race)
+
+#join
+app <- app %>% left_join(race, by=c("examiner_name_last" = "surname"))
+```
+
+## Add tenure part
+
+```{r}
+# get dates
+dates <- app %>% select(examiner_id, filing_date, appl_status_date)
+# calculate start and end date
+dates <- dates %>% mutate(start_date = ymd(filing_date), end_date = as_date(dmy_hms(appl_status_date)))
+
+dates <- dates %>% 
+  group_by(examiner_id) %>% 
+  summarise(
+    earliest_date = min(start_date, na.rm = TRUE), 
+    latest_date = max(end_date, na.rm = TRUE),
+    tenure_days = interval(earliest_date, latest_date) %/% days(1)
+  ) %>% 
+  filter(year(latest_date)<2018)
+
+# join
+app <- app %>% left_join(dates, by="examiner_id")
+```
+
+## Set up 2 work groups
+
+```{r}
+# get 2 work groups
+w1 = app[substr(app$examiner_art_unit, 1, 3) == 163,]
+w2 = app[substr(app$examiner_art_unit, 1, 3) == 177,]
+```
+
+## Summary
+
+```{r}
+summary(w1)
+summary(w2)
+```
+
+## Distributions for gender in each group
+
+```{r}
+a <- ggplot(data=w1, aes(x=factor(gender))) + geom_bar(fill="darkblue")  
+
+
+b <- ggplot(data=w2, aes(x=factor(gender))) + geom_bar(fill="darkred")
+
+a
+b
+```
+For group w1, the ratio is even. However, for w2, there are definitly more male than females.
+
+## Distributions for race in each group
+
+```{r}
+a <- ggplot(data=w1, aes(x=factor(race))) + geom_bar(fill="darkblue")  
+
+
+b <- ggplot(data=w2, aes(x=factor(race))) + geom_bar(fill="darkred")
+
+a
+b
+```
+In both groups, asians and whites are predominantly the majority compared to other races.
+
+```{r}
+a <- ggplot(data=w1, aes(x=race)) +
+  geom_bar(aes(y = (..count..)/sum(..count..), fill=gender  ), show.legend=FALSE )  +
+  ylab("Proportion")+
+  ylim(0,1)+
+  xlab("Race")
+b <- ggplot(data=w2, aes(x=race)) +
+  geom_bar(aes(y = (..count..)/sum(..count..), fill=gender  ) )  +
+  ylab("Proportion")+
+  ylim(0,1)+
+  xlab("Race")
+grid.arrange(a,b,ncol=2, widths=c(1,1.4), top=textGrob("Race distribution for work groups 163 & 177 colored by examiner gender"))
+```
+
+## Network
+
+```{r}
+# limit to 2 groups
+aus = distinct(subset(app, select=c(examiner_art_unit, examiner_id)))
+aus$wg = substr(aus$examiner_art_unit, 1,3)
+aus = aus[aus$wg == 163 | aus$wg == 177,]
+
+tm = merge(x=edges, y=aus, by.x="ego_examiner_id", by.y="examiner_id", all.x=TRUE)
+tm = tm %>% rename(ego_art_unit=examiner_art_unit, ego_wg=wg)
+tm = drop_na(tm)
+
+tm = merge(x=tm, y=aus, by.x="alter_examiner_id", by.y="examiner_id", all.x=TRUE)
+tm = tm %>% rename(alter_art_unit=examiner_art_unit, alter_wg=wg)
+tm = drop_na(tm)
+
+egoNodes = subset(tm, select=c(ego_examiner_id,ego_art_unit, ego_wg)) %>% rename(examiner_id=ego_examiner_id,art_unit=ego_art_unit,wg=ego_wg)
+alterNodes = subset(tm, select=c(alter_examiner_id,alter_art_unit, alter_wg))%>% rename(examiner_id=alter_examiner_id,art_unit=alter_art_unit,wg=alter_wg)
+nodes = rbind(egoNodes, alterNodes)
+nodes = distinct(nodes)
+nodes = nodes %>% group_by(examiner_id) %>% summarise(examiner_id=first(examiner_id), art_unit=first(art_unit), wg=first(wg))
+
+net = graph_from_data_frame(d=tm, vertices=nodes, directed=TRUE)
+net
+```
+
+```{r}
+# centrality
+Degree <- degree(net, v=V(net))
+Betweenness <- betweenness(net)
+Eigenvector <- evcent(net)$vector
+
+V(net)$size = Degree
+V(net)$eig = round(Eigenvector,2)
+V(net)$bet = round(Betweenness,2)
+
+V(net)$color = nodes$art_unit
+
+centralities <- cbind(Degree, Eigenvector, Betweenness)
+centralities = round(centralities,2)
+centralities = data.frame(centralities)
+
+V(net)
+```
+
+# Graph
+
+```{r}
+ggraph(net, layout="kk") +
+  geom_edge_link()+
+  geom_node_point(aes(size=size, color=color), show.legend=T)
+```
+
+It looks like there are examiners leaving their group and seeking advice elsewhere (those are the smaller groups formed around the larger two groups).
+
+It also looks like in the blue network, there are some nodes in black corresponding to examiners starting with identifier 16. Let's look at id 64507 and get a summary.
+
+```{r}
+exam <- app %>% filter(examiner_id==64507)
+summary(exam)
+exam
+```
