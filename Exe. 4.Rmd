@@ -1,0 +1,223 @@
+---
+title: "Exe. 4"
+output:
+  github_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+```
+
+```{r}
+library(ggraph)
+library(igraph)
+
+library(arrow)
+library(tidyverse)
+library(gender)
+library(wru)
+library(lubridate)
+
+library(ggplot2)
+library(gridExtra)
+library(grid)
+
+library("gender")
+library("mice")
+```
+
+```{r}
+app <- read_parquet('/Users/danystefan/Documents/01 McGill University/01 MMA/01 Summer 2022/ORGB 672/Assignments/Exe. 3/672_project_data/app_data_sample.parquet')
+
+edges <- read_csv('/Users/danystefan/Documents/01 McGill University/01 MMA/01 Summer 2022/ORGB 672/Assignments/Exe. 3/672_project_data/edges_sample.csv')
+```
+
+Gender will be determined based on the examiner's first name, which is stored in the field examiner name first. We'll do that using library gender, based on a modified version of their own example.
+
+The applications table has almost 2 million records, which is due to the fact that each examiner has as many records as the amount of applications the examiner worked on during this time period. As a result, our initial step is to collect all unique names into a distinct list called examiner names. We'll next make a guess about each person's gender and link this table back to the original dataset. So, without further ado, here are some names:
+
+## Add gender part
+
+```{r}
+# first name
+names <- app %>% distinct(examiner_name_first)
+# names and gender
+names_gender <- names %>% 
+  do(results = gender(.$examiner_name_first, method = "ssa")) %>% 
+  unnest(cols = c(results), keep_empty = TRUE) %>% 
+  select(
+    examiner_name_first = name,
+    gender,
+    proportion_female
+  )
+names_gender <- names_gender %>% select(examiner_name_first, gender)
+
+# join
+app <- app %>% left_join(names_gender, by='examiner_name_first')
+```
+
+## Add race part
+
+```{r}
+# last names
+sur <- app %>% select(surname = examiner_name_last) %>% distinct()
+
+race <- predict_race(voter.file = sur, surname.only = T) %>% as_tibble()
+race <- race %>%
+  mutate(max_race_p = pmax(pred.asi, pred.bla, pred.his, pred.oth, pred.whi)) %>% 
+  mutate(race = case_when(
+    max_race_p == pred.asi ~ "Asian",
+    max_race_p == pred.bla ~ "black",
+    max_race_p == pred.his ~ "Hispanic",
+    max_race_p == pred.oth ~ "other",
+    max_race_p == pred.whi ~ "white",
+    TRUE ~ NA_character_
+  ))
+
+# cleanup
+race <- race %>% select(surname, race)
+
+#join
+app <- app %>% left_join(race, by=c("examiner_name_last" = "surname"))
+```
+
+To figure out the timespan for which we observe each examiner in the applications data, let’s find the first and the last observed date for each examiner. We’ll first get examiner IDs and application dates in a separate table, for ease of manipulation. We’ll keep examiner ID (the field examiner_id), and earliest and latest dates for each application (filing_date and appl_status_date respectively). We’ll use functions in package lubridate to work with date and time values.
+
+## Add tenure part
+
+```{r}
+# get dates
+dates <- app %>% select(examiner_id, filing_date, appl_status_date)
+# calculate start and end date
+dates <- dates %>% mutate(start_date = ymd(filing_date), end_date = as_date(dmy_hms(appl_status_date)))
+
+dates <- dates %>% 
+  group_by(examiner_id) %>% 
+  summarise(
+    earliest_date = min(start_date, na.rm = TRUE), 
+    latest_date = max(end_date, na.rm = TRUE),
+    tenure_days = interval(earliest_date, latest_date) %/% days(1)
+  ) %>% 
+  filter(year(latest_date)<2018)
+
+# join
+app <- app %>% left_join(dates, by="examiner_id")
+```
+
+## APT
+
+```{r}
+app$appl_end_date <- paste(app$patent_issue_date, app$abandon_date, sep=',')
+
+# cleanup
+app$appl_end_date <- gsub('NA', "", as.character(app$appl_end_date))
+app$appl_end_date <- gsub(',', "", as.character(app$appl_end_date))
+
+# date
+app$appl_end_date <- as.Date(app$appl_end_date, format="%Y-%m-%d")
+app$filing_date <- as.Date(app$filing_date, format="%Y-%m-%d")
+
+app$appl_proc_days <- as.numeric(difftime(app$appl_end_date, app$filing_date, units=c("days")))
+
+# cleanup
+app <- app %>% filter(appl_proc_days >=0 | appl_proc_days != NA)
+```
+
+```{r}
+# Find the count of missing values in each column
+sapply(app, function(x) sum(is.na(x)))
+```
+
+```{r}
+# Remove unnecessary columns for modelling
+applications_mod <- subset(app, select = -c(filing_date, abandon_date, earliest_date, appl_end_date, appl_status_date, patent_issue_date, latest_date, examiner_name_middle, patent_number))
+
+sapply(applications_mod, function(x) sum(is.na(x)))
+```
+
+```{r}
+applications_mod <- applications_mod %>% drop_na(examiner_id)
+```
+
+```{r}
+applications_mod$gender <- as.factor(applications_mod$gender)
+
+applications_mod_imp <- complete(mice(applications_mod, m=3, maxit=3))
+```
+
+## Network
+
+```{r}
+# workgroup
+examiner_aus = distinct(subset(applications_mod_imp, select=c(examiner_art_unit, examiner_id)))
+
+examiner_aus$wg = substr(examiner_aus$examiner_art_unit, 1,3)
+
+# art unit
+examiner_aus = examiner_aus[examiner_aus$wg==162 | examiner_aus$wg==219,]
+
+# merge 
+adv_network = merge(x=edges, y=examiner_aus, by.x="ego_examiner_id", by.y="examiner_id", all.x=TRUE)
+adv_network = adv_network %>% rename(ego_art_unit=examiner_art_unit, ego_wg=wg)
+
+adv_network = drop_na(adv_network)
+
+
+adv_network = merge(x=adv_network, y=examiner_aus, by.x="alter_examiner_id", by.y="examiner_id", all.x=TRUE)
+adv_network = adv_network %>% rename(alter_art_unit=examiner_art_unit, alter_wg=wg)
+adv_network = drop_na(adv_network)
+
+egoNodes = subset(adv_network, select=c(ego_examiner_id,ego_art_unit, ego_wg)) %>% rename(examiner_id=ego_examiner_id,art_unit=ego_art_unit,wg=ego_wg)
+alterNodes = subset(adv_network, select=c(alter_examiner_id,alter_art_unit, alter_wg))%>% rename(examiner_id=alter_examiner_id,art_unit=alter_art_unit,wg=alter_wg)
+nodes = rbind(egoNodes, alterNodes)
+nodes = distinct(nodes)
+
+nodes = nodes %>% group_by(examiner_id) %>% summarise(examiner_id=first(examiner_id), art_unit=first(art_unit), wg=first(wg))
+
+network <- graph_from_data_frame(d=adv_network, vertices=nodes, directed=TRUE)
+network
+```
+
+```{r}
+Degree <- degree(network)
+Closeness <- closeness(network)
+Betweenness <- betweenness(network)
+Eig <- evcent(network)$vector
+
+comp <- data.frame(nodes, Degree, Eig, Closeness, Betweenness)   
+comp 
+```
+
+# Final Merge
+```{r}
+applications_final <- merge(x=applications_mod_imp, y=comp, by='examiner_id', all.x=TRUE)
+```
+
+```{r}
+applications_final = applications_final %>% filter(wg==162 | wg==219)
+
+applications_final <- drop_na(applications_final)
+```
+
+## Model
+
+Simple linear model
+
+```{r}
+lm1 <- lm(appl_proc_days~Eig + Degree + Closeness + Betweenness + gender + tenure_days, data=applications_final)
+summary(lm1)
+```
+
+- The statistical model is significant, and most factors are significant, with the exception of any gender impact. - The baseline processing time is 1604 days (Female, 0 days of tenure, never sought advice) - Increasing the relevance of an examiner's eigenvector from 0 to 1 should reduce processing time by 236 days (i.e, the more important). This makes sense since if a given examiner has a lot of clout in an advice network, with a lot of other examiners seeking their assistance, they are likely to be a subject matter expert and would need to spend less time looking for answers online or from other people to process the application.
+- An examiner requesting guidance from another examiner one more time (an increase of one degree) results in a processing time increase of around three days. This might make sense because getting extra guidance or having others come to you for advise is time intensive and could divert time away from processing applications. - A 138-day reduction in processing time would be projected if closeness centrality increased from 0 to 1. This makes sense because a high closeness centrality corresponds to a well-connected examiner inside the network. Even if they don't know someone who is an expert in a certain field, they are very certain to know someone who knows someone.
+This might make locating the information they need quicker and reduce the amount of time it takes to complete the application - A 27-day increase in processing time equates to a one-unit rise in betweenness centrality. If an examiner is a primary gate for information to travel in the network, similar to degree centrality, this might be time intensive and take time away from them processing applications. - Finally, a one-day increase in tenure results in a small reduction in processing time. It would seem logical that having more experience will result in faster processing times.
+
+Some more varibales:
+
+```{r}
+lm2 <- lm(appl_proc_days~Eig + Degree + Closeness + Betweenness + gender + tenure_days + Degree*gender + Eig*gender + Closeness*gender + Betweenness*gender, data=applications_final)
+summary(lm2)
+```
+
+- All factors are significant with at least 90% confidence in the stat significant model. - Relationships for variables from the previous model are comparable, with the exception that proximity now has a higher positive link with processing time (a unit increase in closeness centrality correlates with a 48 day increase in processing time) - Tenure still reduces processing time for male examiners - A unit increase in degree for male examiners reduces processing time by 4.5 days - A unit increase in eig importance for male examiners increases processing time by 7270 days - A unit increase in closeness for males decreases processing time by 191 days - A unit increase in betweenness for males decreases processing time by 78 days -
